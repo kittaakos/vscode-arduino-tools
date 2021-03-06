@@ -77,7 +77,9 @@
     "onCommand:arduino.debug.start",
     "onCommand:arduino.languageserver.start",
     "onCommand:arduino.languageserver.stop",
-    "onCommand:arduino.languageserver.restart"
+    "onCommand:arduino.languageserver.restart",
+    "onCommand:vscode.arduinoTools.cliVersion",
+    "onCommand:vscode.arduinoTools.coreSearch"
   ],
   "contributes": {
     "languages": [
@@ -126,6 +128,16 @@
         "command": "arduino.debug.start",
         "title": "Start Debug",
         "category": "Arduino"
+      },
+      {
+        "command": "vscode.arduinoTools.cliVersion",
+        "title": "version",
+        "category": "Proposed: Arduino"
+      },
+      {
+        "command": "vscode.arduinoTools.coreSearch",
+        "title": "core search",
+        "category": "Proposed: Arduino"
       }
     ]
   }

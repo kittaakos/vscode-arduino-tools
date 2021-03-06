@@ -8,6 +8,7 @@ import deepmerge from 'deepmerge';
 import { Mutex } from 'async-mutex';
 import vscode, { ExtensionContext } from 'vscode';
 import { LanguageClient, CloseAction, ErrorAction, InitializeError, Message, RevealOutputChannelOn } from 'vscode-languageclient';
+import * as proposed from './proposed';
 
 interface LanguageServerConfig {
     readonly lsPath: string;
@@ -90,6 +91,7 @@ export function activate(context: ExtensionContext) {
         }),
         vscode.commands.registerCommand('arduino.debug.start', (config: DebugConfig) => startDebug(context, config))
     );
+    proposed.activate(context);
 }
 
 async function startDebug(_: ExtensionContext, config: DebugConfig): Promise<boolean> {
