@@ -78,8 +78,9 @@
     "onCommand:arduino.languageserver.start",
     "onCommand:arduino.languageserver.stop",
     "onCommand:arduino.languageserver.restart",
-    "onCommand:vscode.arduinoTools.cliVersion",
-    "onCommand:vscode.arduinoTools.coreSearch"
+    "onCommand:arduinoTools.cliVersion",
+    "onCommand:arduinoTools.coreSearch",
+    "onCommand:arduinoTools.boardSearch"
   ],
   "contributes": {
     "languages": [
@@ -130,15 +131,36 @@
         "category": "Arduino"
       },
       {
-        "command": "vscode.arduinoTools.cliVersion",
+        "command": "arduinoTools.cliVersion",
         "title": "version",
         "category": "Proposed: Arduino"
       },
       {
-        "command": "vscode.arduinoTools.coreSearch",
+        "command": "arduinoTools.coreSearch",
         "title": "core search",
         "category": "Proposed: Arduino"
+      },
+      {
+        "command": "arduinoTools.boardSearch",
+        "title": "board search",
+        "category": "Proposed: Arduino"
       }
-    ]
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Arduino Tools configuration",
+      "properties": {
+        "arduinoTools.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Arduino CLI. If not specified, `arduino-cli` will be picked up from the user's $PATH."
+        },
+        "arduinoTools.cliConfigPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Arduino CLI configuration file. If not set, the `arduino-cli.yaml` config will be picked up from the default `directories.data` location."
+        }
+      }
+    }
   }
 }

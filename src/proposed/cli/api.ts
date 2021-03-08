@@ -1,19 +1,31 @@
 import * as child_process from 'child_process';
 import * as vscode from 'vscode';
-import { Logger, ConsoleLogger, OutputChannelLogger } from '../logger';
-import { Core, Version } from './types';
+import { Logger, OutputChannelLogger } from '../logger';
+import { Core, Version, Port, Board } from './types';
 
 export interface Cli {
     readonly cliPath: string;
-    coreSearch({ query, all }: { query?: string, all?: boolean }): Promise<Core[]>;
-    coreList({ all }: { all?: boolean }): Promise<Core.Installed[]>;
     version(): Promise<Version>;
+    coreSearch({ query, all }: { query?: string, all?: boolean }): Promise<ReadonlyArray<Core>>;
+    coreList({ all }: { all?: boolean }): Promise<ReadonlyArray<Core>>;
+    boardSearch({ query, all }: { query?: string, all?: boolean }): Promise<ReadonlyArray<Core & Board>>;
+    boardList(): Promise<ReadonlyArray<Port>>;
 }
-
 
 export class CpCli implements Cli {
 
-    constructor(readonly cliPath: string, private readonly logger: Logger = new ConsoleLogger()) { }
+    readonly cliPath: string;
+    private readonly cliConfigPath?: string;
+    private readonly logger: Logger;
+
+    constructor(context: vscode.ExtensionContext) {
+        this.logger = new OutputChannelLogger('Arduino CLI', context);
+        const configuration = vscode.workspace.getConfiguration();
+        this.cliPath = configuration.get<string>('arduinoTools.cliPath')!;
+        // TODO: handle relative paths
+        this.cliConfigPath = configuration.get<string>('arduinoTools.cliConfigPath');
+        vscode.window.showInformationMessage(this.cliPath ?? 'empty');
+    }
 
     async version(): Promise<Version> {
         return this.run<Version>(['version']);
@@ -30,17 +42,40 @@ export class CpCli implements Cli {
         return this.run<Core[]>(flags);
     }
 
-    async coreList({ all }: { all?: boolean }): Promise<Core.Installed[]> {
+    async coreList({ all }: { all?: boolean }): Promise<Core[]> {
         const flags = ['core', 'list'];
         if (all === true) {
             flags.push('--all');
         }
-        return this.run<Core.Installed[]>(flags);
+        return this.run<Core[]>(flags);
+    }
+
+    async coreUpdateIndex(): Promise<void> {
+        return this.run(['core', 'update-index']);
+    }
+
+    async boardList(): Promise<Port[]> {
+        return this.run<Port[]>(['board', 'list']);
+    }
+
+    async boardSearch({ query, all }: { query?: string, all?: boolean }): Promise<(Core & Board)[]> {
+        const flags = ['board', 'search'];
+        if (query) {
+            flags.push(`"${query}"`);
+        }
+        if (all === true) {
+            flags.push('--show-hidden'); // Same as `-a` -> `all`.
+        }
+        return this.run<(Core & Board)[]>(flags);
     }
 
     private async run<T>(flags: string[]): Promise<T> {
+        if (this.cliConfigPath) {
+            flags.push('--config-file', `"${this.cliConfigPath}"`);
+        }
+        flags.push('--format', 'json');
         this.logger.info(`${flags.join(' ')}`);
-        const process = child_process.spawn(`${this.cliPath}`, [...flags, '--format', 'json'], { stdio: ['ignore', 'pipe', 'ignore'] });
+        const process = child_process.spawn(`${this.cliPath}`, flags, { stdio: ['ignore', 'pipe', 'ignore'] });
         let raw = '';
         for await (const chunk of process.stdout) {
             raw += chunk;
@@ -60,10 +95,8 @@ export class CpCli implements Cli {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-    const logger = new OutputChannelLogger('Arduino CLI', context);
-    const cliPath = context.globalState.get<string>('vscode.arduinoTools.cliPath') || /* TODO: `which` + offer download install */ 'arduino-cli';
-    context.subscriptions.push(vscode.commands.registerCommand('vscode.arduinoTools.coreSearch', async () => {
-        const cli = new CpCli(cliPath, logger);
+    const cli = new CpCli(context);
+    context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.coreSearch', async () => {
         const [
             allCores,
             installedCores
@@ -81,8 +114,8 @@ export function activate(context: vscode.ExtensionContext): void {
         const items: vscode.QuickPickItem[] = allCores.map(core => {
             return {
                 label: `${core.Name}`,
-                description: `${core.Maintainer ? ` by ${core.Maintainer}` : ''}${Core.Installed.is(core) ? ` version ${core.Installed} installed` : ''}`,
-                detail: core.Boards.length ? `Boards: ${core.Boards.map(({ name }) => name).join(', ')}` : undefined
+                description: `${core.Maintainer ? ` by ${core.Maintainer}` : ''}${core.Installed ? ` version ${core.Installed} installed` : ''}`,
+                detail: core.Boards?.length ? `Boards: ${core.Boards.map(({ name }) => name).join(', ')}` : undefined
             };
         });
         const core = await vscode.window.showQuickPick(items, {
@@ -94,8 +127,46 @@ export function activate(context: vscode.ExtensionContext): void {
             vscode.window.showInformationMessage(`CLI: ${core.label}`);
         }
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('vscode.arduinoTools.cliVersion', async () => {
-        const version = await new CpCli(cliPath, logger).version();
+    context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.cliVersion', async () => {
+        const version = await cli.version();
         vscode.window.showInformationMessage(`CLI: ${version.VersionString}`);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.boardSearch', async () => {
+        const toDispose: vscode.Disposable[] = [];
+        try {
+            const quickPick = vscode.window.createQuickPick();
+            quickPick.placeholder = "Type to search for a board. Press 'Enter' to select board, 'Esc' to cancel.";
+            const board = await new Promise<Board | undefined>(resolve => {
+                toDispose.push(quickPick.onDidChangeValue(async query => {
+                    quickPick.busy = true;
+                    try {
+                        const boards = await cli.boardSearch({ query });
+                        quickPick.items = boards.map(board => ({
+                            label: board.name,
+                            description: board.Installed ? `Installed with ${board.Name}@${board.Installed}` : `Select to install with ${board.Name}@${board.Latest}`
+                        }));
+                    } finally {
+                        quickPick.busy = false;
+                    }
+                }));
+                toDispose.push(quickPick.onDidChangeSelection(items => {
+                    if (items.length && Board.is(items[0])) {
+                        const head = items[0];
+                        resolve(Board.is(head) ? head : undefined);
+                        quickPick.hide();
+                    }
+                })),
+                    toDispose.push(quickPick.onDidHide(() => {
+                        resolve(undefined);
+                        quickPick.dispose();
+                    }));
+                quickPick.show();
+            });
+            if (board) {
+                vscode.window.showInformationMessage(`Selected board: ${board.name}`);
+            }
+        } finally {
+            toDispose.forEach(toDispose => toDispose.dispose());
+        }
     }));
 }
