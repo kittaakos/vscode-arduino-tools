@@ -83,7 +83,7 @@
     "onCommand:arduino.languageserver.restart",
     "onCommand:arduinoTools.cliVersion",
     "onCommand:arduinoTools.coreSearch",
-    "onCommand:arduinoTools.boardSearch"
+    "onCommand:arduinoTools.setBoard"
   ],
   "contributes": {
     "languages": [
@@ -144,8 +144,8 @@
         "category": "Proposed: Arduino"
       },
       {
-        "command": "arduinoTools.boardSearch",
-        "title": "board search",
+        "command": "arduinoTools.setBoard",
+        "title": "Select a board",
         "category": "Proposed: Arduino"
       }
     ],

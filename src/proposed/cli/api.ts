@@ -3,6 +3,8 @@ import { debounce } from 'debounce';
 import * as vscode from 'vscode';
 import { Logger, OutputChannelLogger } from '../logger';
 import { Core, Version, Port, Board } from './types';
+import { ArduinoContext } from '../context';
+import { StatusBar } from './statusBar';
 
 export interface Cli {
     readonly cliPath: string;
@@ -111,6 +113,8 @@ export class CpCli implements Cli {
 
 export function activate(context: vscode.ExtensionContext): void {
     const cli = new CpCli(context);
+    const arduinoContext = new ArduinoContext(context);
+    new StatusBar(arduinoContext);
     context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.coreSearch', async () => {
         const core = await quickPick({
             itemsProvider: async (query, token) => {
@@ -145,7 +149,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const version = await cli.version();
         vscode.window.showInformationMessage(`CLI: ${version.VersionString}`);
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.boardSearch', async () => {
+    context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.setBoard', async () => {
         const board = await quickPick({
             itemsProvider: async (query, token) => {
                 const boards = await cli.boardSearch({ query }, token);
@@ -159,7 +163,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
         });
         if (board) {
-            vscode.window.showInformationMessage(`Selected board: ${board.name}`);
+            arduinoContext.board = board;
         }
     }));
 }
