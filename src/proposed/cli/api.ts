@@ -1,15 +1,22 @@
-import * as child_process from 'child_process';
+import execa from 'execa';
+import { debounce } from 'debounce';
 import * as vscode from 'vscode';
 import { Logger, OutputChannelLogger } from '../logger';
 import { Core, Version, Port, Board } from './types';
 
 export interface Cli {
     readonly cliPath: string;
-    version(): Promise<Version>;
-    coreSearch({ query, all }: { query?: string, all?: boolean }): Promise<ReadonlyArray<Core>>;
-    coreList({ all }: { all?: boolean }): Promise<ReadonlyArray<Core>>;
-    boardSearch({ query, all }: { query?: string, all?: boolean }): Promise<ReadonlyArray<Core & Board>>;
-    boardList(): Promise<ReadonlyArray<Port>>;
+    version(token?: vscode.CancellationToken): Promise<Version>;
+    coreSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<ReadonlyArray<Core>>;
+    coreList({ all }: { all?: boolean }, token?: vscode.CancellationToken): Promise<ReadonlyArray<Core>>;
+    boardSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<ReadonlyArray<Board & { platform: Core }>>;
+    boardList(token?: vscode.CancellationToken): Promise<ReadonlyArray<Port>>;
+}
+export class OperationCanceledError extends Error {
+    constructor(readonly token: vscode.CancellationToken, message: string = 'Operation canceled') {
+        super(message);
+        Object.setPrototypeOf(this, OperationCanceledError.prototype);
+    }
 }
 
 export class CpCli implements Cli {
@@ -27,11 +34,11 @@ export class CpCli implements Cli {
         vscode.window.showInformationMessage(this.cliPath ?? 'empty');
     }
 
-    async version(): Promise<Version> {
-        return this.run<Version>(['version']);
+    async version(token?: vscode.CancellationToken): Promise<Version> {
+        return this.run<Version>(['version'], token);
     }
 
-    async coreSearch({ query, all }: { query?: string, all?: boolean }): Promise<Core[]> {
+    async coreSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<Core[]> {
         const flags = ['core', 'search'];
         if (query) {
             flags.push(`"${query}"`);
@@ -39,26 +46,26 @@ export class CpCli implements Cli {
         if (all === true) {
             flags.push('--all');
         }
-        return this.run<Core[]>(flags);
+        return this.run<Core[]>(flags, token);
     }
 
-    async coreList({ all }: { all?: boolean }): Promise<Core[]> {
+    async coreList({ all }: { all?: boolean }, token?: vscode.CancellationToken): Promise<Core[]> {
         const flags = ['core', 'list'];
         if (all === true) {
             flags.push('--all');
         }
-        return this.run<Core[]>(flags);
+        return this.run<Core[]>(flags, token);
     }
 
-    async coreUpdateIndex(): Promise<void> {
-        return this.run(['core', 'update-index']);
+    async coreUpdateIndex(token?: vscode.CancellationToken): Promise<void> {
+        return this.run(['core', 'update-index'], token);
     }
 
-    async boardList(): Promise<Port[]> {
-        return this.run<Port[]>(['board', 'list']);
+    async boardList(token?: vscode.CancellationToken): Promise<Port[]> {
+        return this.run<Port[]>(['board', 'list'], token);
     }
 
-    async boardSearch({ query, all }: { query?: string, all?: boolean }): Promise<(Core & Board)[]> {
+    async boardSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<(Board & { platform: Core })[]> {
         const flags = ['board', 'search'];
         if (query) {
             flags.push(`"${query}"`);
@@ -66,29 +73,37 @@ export class CpCli implements Cli {
         if (all === true) {
             flags.push('--show-hidden'); // Same as `-a` -> `all`.
         }
-        return this.run<(Core & Board)[]>(flags);
+        return this.run<(Board & { platform: Core })[]>(flags, token);
     }
 
-    private async run<T>(flags: string[]): Promise<T> {
+    private async run<T>(flags: string[], token?: vscode.CancellationToken): Promise<T> {
         if (this.cliConfigPath) {
             flags.push('--config-file', `"${this.cliConfigPath}"`);
         }
         flags.push('--format', 'json');
-        this.logger.info(`${flags.join(' ')}`);
-        const process = child_process.spawn(`${this.cliPath}`, flags, { stdio: ['ignore', 'pipe', 'ignore'] });
-        let raw = '';
-        for await (const chunk of process.stdout) {
-            raw += chunk;
+        const toDispose: vscode.Disposable[] = [];
+        const process = execa(this.cliPath, flags, { shell: true });
+        if (token) {
+            toDispose.push(token.onCancellationRequested(() => {
+                // console.log('process.cancel()');
+                process.cancel();
+            }));
         }
-        // TODO: add config to toggle result on/off
-        // this.logger.info(raw);
         try {
-            return JSON.parse(raw);
-        } catch (err) {
-            if (err instanceof SyntaxError) {
-                console.log(err.message, raw);
+            const start = Date.now();
+            const { stdout } = await process;
+            this.logger.info(`${flags.join(' ')} [${Date.now() - start}ms]`);
+            // TODO: add config to toggle result on/off
+            // this.logger.info(raw);
+            return JSON.parse(stdout);
+        } catch (error) {
+            this.logger.info('canceled');
+            if (token && process.killed && 'isCanceled' in error && error.isCanceled) {
+                throw new OperationCanceledError(token);
             }
-            throw err;
+            throw error;
+        } finally {
+            toDispose.forEach(disposable => disposable.dispose());
         }
     }
 
@@ -97,34 +112,33 @@ export class CpCli implements Cli {
 export function activate(context: vscode.ExtensionContext): void {
     const cli = new CpCli(context);
     context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.coreSearch', async () => {
-        const [
-            allCores,
-            installedCores
-        ] = await Promise.all([
-            cli.coreSearch({}),
-            cli.coreList({})
-        ]);
-        allCores.sort((left, right) => left.Name.localeCompare(right.Name));
-        for (const installed of installedCores) {
-            const index = allCores.findIndex(({ ID }) => ID === installed.ID);
-            if (index !== -1) {
-                allCores.splice(index, 1, installed);
+        const core = await quickPick({
+            itemsProvider: async (query, token) => {
+                const [
+                    allCores,
+                    installedCores
+                ] = await Promise.all([
+                    cli.coreSearch({ query }, token),
+                    cli.coreList({ all: true }, token)
+                ]);
+                allCores.sort((left, right) => left.Name.localeCompare(right.Name));
+                for (const installed of installedCores) {
+                    const index = allCores.findIndex(({ ID }) => ID === installed.ID);
+                    if (index !== -1) {
+                        allCores.splice(index, 1, installed);
+                    }
+                }
+                return allCores.map(core => new CoreItem(core));
+            },
+            selectionResolver: ([head,]) => {
+                if (head instanceof CoreItem) {
+                    return head.core;
+                }
+                return undefined;
             }
-        }
-        const items: vscode.QuickPickItem[] = allCores.map(core => {
-            return {
-                label: `${core.Name}`,
-                description: `${core.Maintainer ? ` by ${core.Maintainer}` : ''}${core.Installed ? ` version ${core.Installed} installed` : ''}`,
-                detail: core.Boards?.length ? `Boards: ${core.Boards.map(({ name }) => name).join(', ')}` : undefined
-            };
-        });
-        const core = await vscode.window.showQuickPick(items, {
-            placeHolder: 'Pick a platform',
-            matchOnDescription: true,
-            matchOnDetail: true
         });
         if (core) {
-            vscode.window.showInformationMessage(`CLI: ${core.label}`);
+            vscode.window.showInformationMessage(`Selected Platform: ${core.Name}`);
         }
     }));
     context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.cliVersion', async () => {
@@ -132,41 +146,99 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showInformationMessage(`CLI: ${version.VersionString}`);
     }));
     context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.boardSearch', async () => {
-        const toDispose: vscode.Disposable[] = [];
-        try {
-            const quickPick = vscode.window.createQuickPick();
-            quickPick.placeholder = "Type to search for a board. Press 'Enter' to select board, 'Esc' to cancel.";
-            const board = await new Promise<Board | undefined>(resolve => {
-                toDispose.push(quickPick.onDidChangeValue(async query => {
-                    quickPick.busy = true;
-                    try {
-                        const boards = await cli.boardSearch({ query });
-                        quickPick.items = boards.map(board => ({
-                            label: board.name,
-                            description: board.Installed ? `Installed with ${board.Name}@${board.Installed}` : `Select to install with ${board.Name}@${board.Latest}`
-                        }));
-                    } finally {
-                        quickPick.busy = false;
-                    }
-                }));
-                toDispose.push(quickPick.onDidChangeSelection(items => {
-                    if (items.length && Board.is(items[0])) {
-                        const head = items[0];
-                        resolve(Board.is(head) ? head : undefined);
-                        quickPick.hide();
-                    }
-                })),
-                    toDispose.push(quickPick.onDidHide(() => {
-                        resolve(undefined);
-                        quickPick.dispose();
-                    }));
-                quickPick.show();
-            });
-            if (board) {
-                vscode.window.showInformationMessage(`Selected board: ${board.name}`);
+        const board = await quickPick({
+            itemsProvider: async (query, token) => {
+                const boards = await cli.boardSearch({ query }, token);
+                return boards.map(board => new BoardItem(board, board.platform));
+            },
+            selectionResolver: ([head,]) => {
+                if (head instanceof BoardItem) {
+                    return head.board;
+                }
+                return undefined;
             }
-        } finally {
-            toDispose.forEach(toDispose => toDispose.dispose());
+        });
+        if (board) {
+            vscode.window.showInformationMessage(`Selected board: ${board.name}`);
         }
     }));
+}
+
+class BoardItem implements vscode.QuickPickItem {
+    label: string;
+    description: string;
+    constructor(readonly board: Board, readonly platform: Core) {
+        this.label = board.name;
+        this.description = platform.Installed
+            ? `Installed with ${platform.Name}@${platform.Installed}`
+            : `Select to install with ${platform.Name}@${platform.Latest}`;
+    }
+}
+class CoreItem implements vscode.QuickPickItem {
+    label: string;
+    description: string;
+    detail?: string;
+    constructor(readonly core: Core) {
+        this.label = `${core.Name}`;
+        this.description = `${core.Maintainer ? ` by ${core.Maintainer}` : ''}${core.Installed ? ` version ${core.Installed} installed` : ''}`;
+        this.detail = core.Boards?.length ? `Boards: ${core.Boards.map(({ name }) => name).join(', ')}` : undefined;
+    }
+}
+
+async function quickPick<T>({ itemsProvider, selectionResolver }: {
+    itemsProvider: (query: string, token: vscode.CancellationToken) => Promise<vscode.QuickPickItem[]>,
+    selectionResolver: (items: vscode.QuickPickItem[]) => T | undefined
+}): Promise<T | undefined> {
+
+    const toDispose: vscode.Disposable[] = [];
+    const toDisposeOnDidValueChange: vscode.Disposable[] = [];
+    try {
+        const quickPick = vscode.window.createQuickPick();
+        quickPick.placeholder = "Type to search for a board. Press 'Enter' to select board, 'Esc' to cancel.";
+        const run = async (query: string) => {
+            // console.log('new query: ' + query);
+            quickPick.busy = true;
+            toDisposeOnDidValueChange.forEach(disposable => disposable.dispose());
+            const tokenSource = new vscode.CancellationTokenSource();
+            toDispose.push(tokenSource);
+            toDisposeOnDidValueChange.push(new vscode.Disposable(() => {
+                // console.log('tokenSource.cancel()');
+                tokenSource.cancel();
+            }));
+            try {
+                // console.log('>> start query: ' + query);
+                // const boards = await cli.boardSearch({ query }, tokenSource.token);
+                // console.log('<< query done: ' + query + ' hit: ' + boards.length);
+                const items = await itemsProvider(query, tokenSource.token);
+                quickPick.items = items;
+            } catch (error) {
+                // console.log('error', error);
+                if (error instanceof OperationCanceledError && error.token === tokenSource.token) {
+                    quickPick.items = [];
+                    return;
+                }
+                throw error;
+            } finally {
+                quickPick.busy = false;
+            }
+        };
+        const picked = await new Promise<T | undefined>(resolve => {
+            toDispose.push(quickPick.onDidChangeValue(debounce(run, 200)));
+            toDispose.push(quickPick.onDidChangeSelection(items => {
+                const resolved = selectionResolver(items);
+                if (resolved) {
+                    resolve(resolved);
+                    quickPick.hide();
+                }
+            }));
+            toDispose.push(quickPick.onDidHide(() => {
+                resolve(undefined);
+                quickPick.dispose();
+            }));
+            quickPick.show();
+        });
+        return picked;
+    } finally {
+        toDispose.forEach(toDispose => toDispose.dispose());
+    }
 }

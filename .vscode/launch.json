@@ -13,9 +13,8 @@
       "stopOnEntry": false,
       "sourceMaps": true,
       "outFiles": [
-        "${workspaceRoot}/lib/**/*.js"
-      ],
-      "preLaunchTask": "npm"
+        "${workspaceRoot}/dit/**/*.js"
+      ]
     }
   ]
 }
