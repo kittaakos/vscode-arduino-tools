@@ -2,9 +2,11 @@ import execa from 'execa';
 import { debounce } from 'debounce';
 import * as vscode from 'vscode';
 import { Logger, OutputChannelLogger } from '../logger';
-import { Core, Version, Port, Board } from './types';
+import { Core, Version, Port, Board, PortDidChangeEvent } from './types';
 import { ArduinoContext } from '../context';
 import { StatusBar } from './statusBar';
+
+const { parse: parseJsonStream } = require('JSONStream') as { parse: () => NodeJS.WritableStream };
 
 export interface Cli {
     readonly cliPath: string;
@@ -13,6 +15,7 @@ export interface Cli {
     coreList({ all }: { all?: boolean }, token?: vscode.CancellationToken): Promise<ReadonlyArray<Core>>;
     boardSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<ReadonlyArray<Board & { platform: Core }>>;
     boardList(token?: vscode.CancellationToken): Promise<ReadonlyArray<Port>>;
+    onPortDidChange: vscode.Event<PortDidChangeEvent>;
 }
 export class OperationCanceledError extends Error {
     constructor(readonly token: vscode.CancellationToken, message: string = 'Operation canceled') {
@@ -26,6 +29,7 @@ export class CpCli implements Cli {
     readonly cliPath: string;
     private readonly cliConfigPath?: string;
     private readonly logger: Logger;
+    private readonly onPortDidChangeEmitter = new vscode.EventEmitter<PortDidChangeEvent>();
 
     constructor(context: vscode.ExtensionContext) {
         this.logger = new OutputChannelLogger('Arduino CLI', context);
@@ -33,7 +37,11 @@ export class CpCli implements Cli {
         this.cliPath = configuration.get<string>('arduinoTools.cliPath')!;
         // TODO: handle relative paths
         this.cliConfigPath = configuration.get<string>('arduinoTools.cliConfigPath');
-        vscode.window.showInformationMessage(this.cliPath ?? 'empty');
+        context.subscriptions.push(
+            this.onPortDidChangeEmitter,
+            this.onPortDidChange(event => vscode.window.showInformationMessage(JSON.stringify(event)))
+        );
+        this.watchPorts();
     }
 
     async version(token?: vscode.CancellationToken): Promise<Version> {
@@ -78,6 +86,10 @@ export class CpCli implements Cli {
         return this.run<(Board & { platform: Core })[]>(flags, token);
     }
 
+    get onPortDidChange(): vscode.Event<PortDidChangeEvent> {
+        return this.onPortDidChangeEmitter.event;
+    }
+
     private async run<T>(flags: string[], token?: vscode.CancellationToken): Promise<T> {
         if (this.cliConfigPath) {
             flags.push('--config-file', `"${this.cliConfigPath}"`);
@@ -107,6 +119,21 @@ export class CpCli implements Cli {
         } finally {
             toDispose.forEach(disposable => disposable.dispose());
         }
+    }
+
+    private async watchPorts(): Promise<void> {
+        const flags = ['board', 'list', '--watch'];
+        if (this.cliConfigPath) {
+            flags.push('--config-file', `"${this.cliConfigPath}"`);
+        }
+        flags.push('--format', 'json');
+        const process = execa(this.cliPath, flags, { shell: true, encoding: 'utf8' });
+        process.stdout.pipe(parseJsonStream()).on('data', (candidate: any) => {
+            if (PortDidChangeEvent.is(candidate)) {
+                this.onPortDidChangeEmitter.fire(candidate);
+            }
+        });
+        await process;
     }
 
 }

@@ -22,6 +22,7 @@ export interface Board {
     readonly fqbn?: string;
     readonly VID?: string;
     readonly PID?: string;
+    readonly serial_number?: string;
 }
 export namespace Board {
     export function is(arg: any): arg is Board {
@@ -37,4 +38,21 @@ export interface Port {
 }
 export namespace Port {
     export type Protocol = 'serial' | 'network' | 'unknown';
+}
+
+
+export interface PortDidRemoveEvent {
+    readonly address: string;
+    readonly type: 'remove';
+}
+export interface PortDidAddEvent extends Port {
+    readonly type: 'add';
+}
+export type PortDidChangeEvent = PortDidAddEvent | PortDidRemoveEvent;
+export namespace PortDidChangeEvent {
+    export function is(arg: any): arg is PortDidChangeEvent {
+        return !!arg
+            && 'type' in arg && typeof arg.type === 'string' && (arg.type === 'add' || arg.type === 'remove')
+            && 'address' in arg && typeof arg.address === 'string';
+    }
 }
