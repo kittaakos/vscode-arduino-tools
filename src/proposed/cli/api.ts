@@ -11,10 +11,10 @@ const { parse: parseJsonStream } = require('JSONStream') as { parse: () => NodeJ
 export interface Cli {
     readonly cliPath: string;
     version(token?: vscode.CancellationToken): Promise<Version>;
-    coreSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<ReadonlyArray<Core>>;
-    coreList({ all }: { all?: boolean }, token?: vscode.CancellationToken): Promise<ReadonlyArray<Core>>;
-    boardSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<ReadonlyArray<Board & { platform: Core }>>;
-    boardList(token?: vscode.CancellationToken): Promise<ReadonlyArray<Port>>;
+    coreSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<Core[]>;
+    coreList({ all }: { all?: boolean }, token?: vscode.CancellationToken): Promise<Core[]>;
+    boardSearch({ query, all }: { query?: string, all?: boolean }, token?: vscode.CancellationToken): Promise<(Board & { platform: Core })[]>;
+    boardList(token?: vscode.CancellationToken): Promise<Port[]>;
     onPortDidChange: vscode.Event<PortDidChangeEvent>;
 }
 export class OperationCanceledError extends Error {
@@ -139,12 +139,12 @@ export class CpCli implements Cli {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-    const cli = new CpCli(context);
     const arduinoContext = new ArduinoContext(context);
     new StatusBar(arduinoContext);
     context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.coreSearch', async () => {
         const core = await quickPick({
             itemsProvider: async (query, token) => {
+                const cli = await arduinoContext.cli();
                 const [
                     allCores,
                     installedCores
@@ -173,14 +173,27 @@ export function activate(context: vscode.ExtensionContext): void {
         }
     }));
     context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.cliVersion', async () => {
+        const cli = await arduinoContext.cli();
         const version = await cli.version();
         vscode.window.showInformationMessage(`CLI: ${version.VersionString}`);
     }));
     context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.configureBoard', async () => {
         const board = await quickPick({
             itemsProvider: async (query, token) => {
+                const cli = await arduinoContext.cli();
                 const boards = await cli.boardSearch({ query }, token);
-                return boards.map(board => new BoardItem(board, board.platform));
+                const items = boards.map(board => new BoardItem(board, board.platform));
+                for (const port of arduinoContext.discoveredPorts) {
+                    const board: Board = Board.is(port) ? port : { name: 'Unknown' };
+                    if (board.fqbn) {
+                        const index = items.findIndex(item => item.board.fqbn === board.fqbn);
+                        if (index !== -1) {
+                            items.splice(index, 1);
+                        }
+                    }
+                    items.unshift(new BoardItem(board, port));
+                }
+                return items;
             },
             selectionResolver: ([head,]) => {
                 if (head instanceof BoardItem) {
@@ -194,6 +207,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
     }));
     context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.configurePort', async () => {
+        const cli = await arduinoContext.cli();
         const ports = await cli.boardList();
         const items: PortItem[] = [];
         for (const port of ports) {
@@ -216,11 +230,16 @@ export function activate(context: vscode.ExtensionContext): void {
 class BoardItem implements vscode.QuickPickItem {
     label: string;
     description: string;
-    constructor(readonly board: Board, readonly platform: Core) {
-        this.label = board.name;
-        this.description = platform.Installed
-            ? `Installed with ${platform.Name}@${platform.Installed}`
-            : `Select to install with ${platform.Name}@${platform.Latest}`;
+    constructor(readonly board: Board, readonly coreOrPort: Core | Port) {
+        const icon = Port.is(coreOrPort) ? '$(plug)' : '$(circuit-board)';
+        this.label = `${icon} ${board.name}`;
+        if (Port.is(coreOrPort)) {
+            this.description = `on ${coreOrPort.address}`;
+        } else {
+            this.description = coreOrPort.Installed
+                ? `Installed with ${coreOrPort.Name}@${coreOrPort.Installed}`
+                : `Select to install with ${coreOrPort.Name}@${coreOrPort.Latest}`;
+        }
     }
 }
 class CoreItem implements vscode.QuickPickItem {
@@ -293,6 +312,7 @@ async function quickPick<T>({ itemsProvider, selectionResolver }: {
                 quickPick.dispose();
             }));
             quickPick.show();
+            run(''); // TODO: make this better.
         });
         return picked;
     } finally {

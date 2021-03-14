@@ -38,6 +38,9 @@ export interface Port {
 }
 export namespace Port {
     export type Protocol = 'serial' | 'network' | 'unknown';
+    export function is(arg: any): arg is Port {
+        return !!arg && 'address' in arg && typeof arg.address === 'string' && !!arg.address;
+    }
 }
 
 
@@ -47,6 +50,11 @@ export interface PortDidRemoveEvent {
 }
 export interface PortDidAddEvent extends Port {
     readonly type: 'add';
+}
+export namespace PortDidAddEvent {
+    export function is(event: PortDidChangeEvent): event is PortDidAddEvent {
+        return event.type === 'add';
+    }
 }
 export type PortDidChangeEvent = PortDidAddEvent | PortDidRemoveEvent;
 export namespace PortDidChangeEvent {

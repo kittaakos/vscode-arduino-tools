@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ArduinoContext, Port, Board } from '../context';
+import { ArduinoContext } from '../context';
 
 export class StatusBar {
 
@@ -16,32 +16,32 @@ export class StatusBar {
             this.board,
             this.port,
             arduinoContext.onBoardDidChange(() => this.update(arduinoContext)),
-            arduinoContext.onPortDidChange(() => this.update(arduinoContext))
+            arduinoContext.onPortDidChange(() => this.update(arduinoContext)),
+            arduinoContext.onDiscoveredPortsDidChange(() => this.update(arduinoContext))
         );
         this.update(arduinoContext);
     }
 
-    private update({ board, port }: { port: Port | undefined, board: Board | undefined }): void {
-        if (!board) {
-            this.board.text = '$(close) no board selected';
-            this.board.show();
-            this.port.hide();
-            return;
-        }
-        if (board && port) {
-            this.board.text = `$(plug) ${board.name}`;
-            this.port.text = `on ${port.address}`;
-            this.board.show();
-            this.port.show();
-            return;
-        }
+    private update(arduinoContext: ArduinoContext): void {
+        const { board, port, discoveredPorts } = arduinoContext;
         if (board) {
-            this.board.text = board.name;
-            this.port.text = 'not connected';
-            this.board.show();
+            if (port) {
+                let icon = '';
+                if (discoveredPorts.some(({ address, fqbn }) => port.address === address && !!board.fqbn && board.fqbn === fqbn)) {
+                    icon = '$(plug)';
+                }
+                this.board.text = `${icon} ${board.name}`;
+                this.port.text = `on ${port.address}`;
+            } else {
+                this.board.text = board.name;
+                this.port.text = 'not connected';
+            }
             this.port.show();
-            return;
+        } else {
+            this.board.text = '$(close) no board selected';
+            this.port.hide();
         }
+        this.board.show();
     }
 
 }
