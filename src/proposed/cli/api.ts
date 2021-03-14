@@ -176,7 +176,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const version = await cli.version();
         vscode.window.showInformationMessage(`CLI: ${version.VersionString}`);
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.setBoard', async () => {
+    context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.configureBoard', async () => {
         const board = await quickPick({
             itemsProvider: async (query, token) => {
                 const boards = await cli.boardSearch({ query }, token);
@@ -191,6 +191,24 @@ export function activate(context: vscode.ExtensionContext): void {
         });
         if (board) {
             arduinoContext.board = board;
+        }
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('arduinoTools.configurePort', async () => {
+        const ports = await cli.boardList();
+        const items: PortItem[] = [];
+        for (const port of ports) {
+            if (port.boards) {
+                items.push(...port.boards.map(board => new PortItem(port, board)));
+            } else {
+                items.push(new PortItem(port));
+            }
+        }
+        const item = await vscode.window.showQuickPick(items);
+        if (item) {
+            if (item.board) {
+                arduinoContext.board = item.board;
+            }
+            arduinoContext.port = item.port;
         }
     }));
 }
@@ -213,6 +231,14 @@ class CoreItem implements vscode.QuickPickItem {
         this.label = `${core.Name}`;
         this.description = `${core.Maintainer ? ` by ${core.Maintainer}` : ''}${core.Installed ? ` version ${core.Installed} installed` : ''}`;
         this.detail = core.Boards?.length ? `Boards: ${core.Boards.map(({ name }) => name).join(', ')}` : undefined;
+    }
+}
+class PortItem implements vscode.QuickPickItem {
+    label: string;
+    description?: string;
+    constructor(readonly port: Port, readonly board?: Board) {
+        this.label = `on ${port.address}`;
+        this.description = board ? `connected to ${board.name}` : undefined;
     }
 }
 

@@ -3,37 +3,44 @@ import { ArduinoContext, Port, Board } from '../context';
 
 export class StatusBar {
 
-    private board = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 200);
-    private port = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 201);
+    private readonly board: vscode.StatusBarItem;
+    private readonly port: vscode.StatusBarItem;
 
     constructor(arduinoContext: ArduinoContext) {
         const { extensionContext } = arduinoContext;
-        this.board.command = 'arduinoTools.setBoard';
+        this.board = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 201);
+        this.board.command = 'arduinoTools.configureBoard';
+        this.port = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 200);
+        this.port.command = 'arduinoTools.configurePort';
         extensionContext.subscriptions.push(
             this.board,
             this.port,
-            arduinoContext.onBoardDidChange(this.updateBoard.bind(this)),
-            arduinoContext.onPortDidChange(this.updatePort.bind(this))
+            arduinoContext.onBoardDidChange(() => this.update(arduinoContext)),
+            arduinoContext.onPortDidChange(() => this.update(arduinoContext))
         );
-        this.updateBoard(arduinoContext.board);
-        this.updatePort(arduinoContext.port);
+        this.update(arduinoContext);
     }
 
-    private updatePort(port: Port | undefined): void {
-        if (port) {
-            this.port.text = `connected on ${port.address}`;
-            this.port.show();
-        } else {
+    private update({ board, port }: { port: Port | undefined, board: Board | undefined }): void {
+        if (!board) {
+            this.board.text = '$(close) no board selected';
+            this.board.show();
             this.port.hide();
+            return;
         }
-    }
-
-    private updateBoard(board: Board | undefined): void {
+        if (board && port) {
+            this.board.text = `$(plug) ${board.name}`;
+            this.port.text = `on ${port.address}`;
+            this.board.show();
+            this.port.show();
+            return;
+        }
         if (board) {
             this.board.text = board.name;
+            this.port.text = 'not connected';
             this.board.show();
-        } else {
-            this.board.hide();
+            this.port.show();
+            return;
         }
     }
 

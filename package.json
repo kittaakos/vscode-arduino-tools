@@ -84,7 +84,8 @@
     "onCommand:arduino.languageserver.restart",
     "onCommand:arduinoTools.cliVersion",
     "onCommand:arduinoTools.coreSearch",
-    "onCommand:arduinoTools.setBoard"
+    "onCommand:arduinoTools.configureBoard",
+    "onCommand:arduinoTools.configurePort"
   ],
   "contributes": {
     "languages": [
@@ -145,8 +146,13 @@
         "category": "Proposed: Arduino"
       },
       {
-        "command": "arduinoTools.setBoard",
-        "title": "Select a board",
+        "command": "arduinoTools.configureBoard",
+        "title": "Configure Board",
+        "category": "Proposed: Arduino"
+      },
+      {
+        "command": "arduinoTools.configurePort",
+        "title": "Configure Port",
         "category": "Proposed: Arduino"
       }
     ],
